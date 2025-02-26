@@ -1,8 +1,5 @@
 const express = require('express');
 const Shopify = require('shopify-api-node');
-const createCsvWriter = require('csv-writer').createObjectCsvWriter;
-const fs = require('fs');
-const path = require('path');
 const cors = require('cors');
 require('dotenv').config();
 
@@ -20,27 +17,36 @@ const shopify = new Shopify({
   apiVersion: '2023-10'
 });
 
-// Rota para exportar produtos como CSV
+// Rota para exportar produtos como CSV com melhor tratamento de erros
 app.get('/export-products', async (req, res) => {
   try {
-    // Coletar todos os produtos
-    let products = [];
-    let params = { limit: 250 };
-    let hasNextPage = true;
+    // Log para diagnóstico
+    console.log('Iniciando exportação de produtos');
     
-    while (hasNextPage) {
-      const productBatch = await shopify.product.list(params);
-      products = products.concat(productBatch);
-      
-      if (productBatch.length < 250) {
-        hasNextPage = false;
-      } else {
-        params.page_info = productBatch.nextPageParameters?.page_info;
-      }
+    // Verificar se as credenciais estão configuradas
+    if (!process.env.SHOPIFY_SHOP_NAME || !process.env.SHOPIFY_API_KEY || !process.env.SHOPIFY_PASSWORD) {
+      return res.status(500).json({ 
+        error: 'Configuração incompleta', 
+        message: 'Credenciais do Shopify não configuradas adequadamente nas variáveis de ambiente.' 
+      });
     }
+    
+    // Log das credenciais (apenas parcial para segurança)
+    console.log(`Usando loja: ${process.env.SHOPIFY_SHOP_NAME}`);
+    console.log(`API Key configurada: ${process.env.SHOPIFY_API_KEY ? 'Sim' : 'Não'}`);
+    
+    // Coletar todos os produtos
+    console.log('Buscando produtos da API Shopify...');
+    let products = [];
+    let params = { limit: 50 }; // Reduzido para evitar timeout
+    
+    const productBatch = await shopify.product.list(params);
+    products = products.concat(productBatch);
+    console.log(`${products.length} produtos encontrados`);
     
     // Processar produtos e variantes para formato CSV
     let csvData = [];
+    console.log('Processando produtos para CSV...');
     
     for (const product of products) {
       if (product.variants && product.variants.length > 0) {
@@ -62,28 +68,61 @@ app.get('/export-products', async (req, res) => {
       }
     }
     
+    console.log(`${csvData.length} linhas de dados processadas`);
+    
+    // Criar CSV como string
+    console.log('Gerando string CSV...');
+    let csvContent = 'SKU,Nome do Produto,Variação,Quantidade em Estoque\n';
+    
+    csvData.forEach(item => {
+      csvContent += `${item.sku},"${item.product_name}","${item.variant_name}",${item.inventory_quantity}\n`;
+    });
+    
     // Configurar a resposta
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename=shopify-products.csv');
-    
-    // Criar CSV diretamente na resposta
-    const csvWriter = createCsvWriter({
-      path: null, // nenhum arquivo no disco, só na memória
-      header: [
-        { id: 'sku', title: 'SKU' },
-        { id: 'product_name', title: 'Nome do Produto' },
-        { id: 'variant_name', title: 'Variação' },
-        { id: 'inventory_quantity', title: 'Quantidade em Estoque' }
-      ]
-    });
-    
-    // Gerar CSV e enviar na resposta
-    const csvString = await csvWriter.writeRecords(csvData).then(() => csvWriter.stringifier.getHeaderString() + csvWriter.stringifier.getRecordsString());
-    res.send(csvString);
+    res.send(csvContent);
     
   } catch (error) {
     console.error('Erro ao exportar produtos:', error);
-    res.status(500).json({ error: 'Falha ao exportar produtos', details: error.message });
+    res.status(500).json({ 
+      error: 'Falha ao exportar produtos', 
+      message: error.message,
+      stack: error.stack 
+    });
+  }
+});
+
+// Rota de diagnóstico
+app.get('/diagnostico', async (req, res) => {
+  try {
+    const result = {
+      ambiente: {
+        shopName: process.env.SHOPIFY_SHOP_NAME ? 'Configurado' : 'Não configurado',
+        apiKey: process.env.SHOPIFY_API_KEY ? 'Configurado' : 'Não configurado',
+        password: process.env.SHOPIFY_PASSWORD ? 'Configurado' : 'Não configurado'
+      }
+    };
+    
+    // Tentar conexão com Shopify
+    try {
+      const shop = await shopify.shop.get();
+      result.shopify = {
+        conectado: true,
+        nome: shop.name,
+        email: shop.email,
+        plano: shop.plan_name
+      };
+    } catch (shopifyError) {
+      result.shopify = {
+        conectado: false,
+        erro: shopifyError.message
+      };
+    }
+    
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
   }
 });
 
