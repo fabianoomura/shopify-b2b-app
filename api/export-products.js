@@ -18,8 +18,27 @@ module.exports = async (req, res) => {
       apiVersion: '2023-10'
     });
     
-    // Buscar produtos (apenas os primeiros 2000 para evitar timeout)
-    const products = await shopify.product.list({ limit: 2000 });
+    // Buscar todos os produtos com paginação
+    let products = [];
+    let params = { limit: 250 }; // máximo permitido pela API do Shopify
+    let hasNextPage = true;
+    
+    while (hasNextPage) {
+      const productBatch = await shopify.product.list(params);
+      products = products.concat(productBatch);
+      
+      // Verifica se há mais páginas
+      if (productBatch.length < 250) {
+        hasNextPage = false;
+      } else {
+        // Configura para próxima página
+        if (productBatch.nextPageParameters) {
+          params = productBatch.nextPageParameters;
+        } else {
+          hasNextPage = false;
+        }
+      }
+    }
     
     // Processar produtos para CSV
     let csvData = [];
