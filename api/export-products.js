@@ -18,8 +18,8 @@ module.exports = async (req, res) => {
       apiVersion: '2023-10'
     });
     
-    // Buscar produtos (apenas os primeiros 50 para evitar timeout)
-    const products = await shopify.product.list({ limit: 50 });
+    // Buscar produtos (apenas os primeiros 2000 para evitar timeout)
+    const products = await shopify.product.list({ limit: 2000 });
     
     // Processar produtos para CSV
     let csvData = [];
