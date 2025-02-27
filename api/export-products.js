@@ -20,61 +20,60 @@ module.exports = async (req, res) => {
       apiVersion: '2023-10'
     });
     
-    console.log('Obtendo contagem total de produtos');
-    const totalCount = await shopify.product.count();
-    console.log(`Total de ${totalCount} produtos na loja`);
-    
-    // Buscar produtos de forma eficiente
-    console.log('Buscando produtos...');
+    // Buscar produtos de forma simplificada
+    console.log('Iniciando busca de produtos...');
     let allProducts = [];
-    let pageInfo = null; // Para usar com o cursor de paginação
+    let params = { limit: 250 }; // Máximo permitido pela API
     
-    // Usar o método correto de paginação baseada em cursor
-    while (true) {
-      // Configurar parâmetros para esta página
-      const params = {
-        limit: 250 // Máximo permitido pela API
-      };
-      
-      // Se tivermos um cursor da página anterior, usá-lo
-      if (pageInfo) {
-        params.page_info = pageInfo;
-      }
-      
-      // Fazer a chamada da API
-      const response = await shopify.product.list(params);
-      console.log(`Obtidos ${response.length} produtos neste lote`);
-      
-      // Adicionar produtos ao array master
-      allProducts = allProducts.concat(response);
-      console.log(`Total acumulado: ${allProducts.length}/${totalCount} produtos`);
-      
-      // Verificar se há mais páginas
-      const link = shopify.callLimits.calls.rest.made[0]?.header?.link;
-      if (!link || !link.includes('rel="next"')) {
-        console.log('Não há mais páginas para buscar');
+    // Loop básico de paginação
+    let keepFetching = true;
+    let currentPage = 1;
+    
+    while (keepFetching) {
+      try {
+        console.log(`Buscando página ${currentPage}...`);
+        const products = await shopify.product.list(params);
+        console.log(`Recebidos ${products.length} produtos na página ${currentPage}`);
+        
+        // Adicionar produtos ao array master
+        allProducts = allProducts.concat(products);
+        console.log(`Total acumulado: ${allProducts.length} produtos`);
+        
+        // Verificar se chegamos ao fim
+        if (products.length < 250) {
+          console.log('Última página alcançada (menos de 250 produtos)');
+          keepFetching = false;
+          break;
+        }
+        
+        // Preparar para próxima página
+        currentPage++;
+        params.page = currentPage;
+        
+        // Proteção contra loops infinitos
+        if (currentPage > 20) {
+          console.log('Limite de segurança de páginas atingido');
+          keepFetching = false;
+          break;
+        }
+      } catch (pageError) {
+        console.error(`Erro ao buscar página ${currentPage}:`, pageError.message);
+        keepFetching = false;
         break;
       }
-      
-      // Extrair o cursor para a próxima página
-      const nextLink = link.split(',').find(str => str.includes('rel="next"'));
-      if (!nextLink) break;
-      
-      const match = nextLink.match(/page_info=([^>&]*)/);
-      if (!match) break;
-      
-      pageInfo = match[1];
-      console.log(`Cursor para próxima página obtido: ${pageInfo.substring(0, 10)}...`);
     }
     
-    console.log(`Processamento completo: ${allProducts.length}/${totalCount} produtos obtidos`);
+    console.log(`Busca concluída: ${allProducts.length} produtos obtidos no total`);
     
     // Processar produtos para CSV
+    console.log('Processando produtos para CSV...');
     let csvData = [];
+    let variantCount = 0;
     
     for (const product of allProducts) {
       if (product.variants && product.variants.length > 0) {
         for (const variant of product.variants) {
+          variantCount++;
           csvData.push({
             id: product.id,
             variant_id: variant.id,
@@ -88,18 +87,21 @@ module.exports = async (req, res) => {
       }
     }
     
-    console.log(`Processadas ${csvData.length} variantes para o CSV`);
+    console.log(`Processamento concluído: ${variantCount} variantes para o CSV`);
     
     // Criar CSV
     let csvContent = 'ID,Variant_ID,SKU,Nome_do_Produto,Variação,Quantidade,Preço\n';
     
     csvData.forEach(item => {
-      const escapedName = item.product_name.replace(/"/g, '""');
-      const escapedVariant = item.variant_name.replace(/"/g, '""');
-      const escapedSku = item.sku.replace(/"/g, '""');
+      // Garantir que campos de texto estão devidamente escapados
+      const safeProduct = item.product_name ? item.product_name.replace(/"/g, '""') : '';
+      const safeVariant = item.variant_name ? item.variant_name.replace(/"/g, '""') : '';
+      const safeSku = item.sku ? item.sku.replace(/"/g, '""') : '';
       
-      csvContent += `${item.id},${item.variant_id},"${escapedSku}","${escapedName}","${escapedVariant}",${item.inventory_quantity},${item.price}\n`;
+      csvContent += `${item.id},${item.variant_id},"${safeSku}","${safeProduct}","${safeVariant}",${item.inventory_quantity},${item.price}\n`;
     });
+    
+    console.log('CSV gerado com sucesso, enviando resposta...');
     
     // Enviar resposta
     res.setHeader('Content-Type', 'text/csv');
@@ -108,6 +110,10 @@ module.exports = async (req, res) => {
     
   } catch (error) {
     console.error('Erro na exportação:', error);
-    res.status(500).json({ error: 'Falha ao exportar produtos', message: error.message });
+    res.status(500).json({ 
+      error: 'Falha ao exportar produtos', 
+      message: error.message, 
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 };
