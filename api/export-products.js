@@ -2,7 +2,7 @@ const Shopify = require('shopify-api-node');
 
 module.exports = async (req, res) => {
   try {
-    console.log('Iniciando exportação completa dos produtos');
+    console.log('Iniciando exportação de produtos');
     
     // Verificar credenciais
     if (!process.env.SHOPIFY_SHOP_NAME || !process.env.SHOPIFY_API_KEY || !process.env.SHOPIFY_PASSWORD) {
@@ -20,39 +20,56 @@ module.exports = async (req, res) => {
       apiVersion: '2023-10'
     });
     
-    console.log('Conectado à API Shopify, buscando produtos...');
+    console.log('Obtendo contagem total de produtos');
+    const totalCount = await shopify.product.count();
+    console.log(`Total de ${totalCount} produtos na loja`);
     
-    // Buscar todos os produtos com paginação adequada
+    // Buscar produtos de forma eficiente
+    console.log('Buscando produtos...');
     let allProducts = [];
-    let params = { limit: 250 }; // 250 é o máximo permitido pela API Shopify
-    let hasNextPage = true;
-    let pageCount = 0;
+    let pageInfo = null; // Para usar com o cursor de paginação
     
-    // Usar paginação para buscar todos os produtos
-    while (hasNextPage) {
-      pageCount++;
-      console.log(`Buscando página ${pageCount} de produtos...`);
+    // Usar o método correto de paginação baseada em cursor
+    while (true) {
+      // Configurar parâmetros para esta página
+      const params = {
+        limit: 250 // Máximo permitido pela API
+      };
       
-      const productBatch = await shopify.product.list(params);
-      allProducts = allProducts.concat(productBatch);
-      console.log(`Recebidos ${productBatch.length} produtos. Total acumulado: ${allProducts.length}`);
+      // Se tivermos um cursor da página anterior, usá-lo
+      if (pageInfo) {
+        params.page_info = pageInfo;
+      }
+      
+      // Fazer a chamada da API
+      const response = await shopify.product.list(params);
+      console.log(`Obtidos ${response.length} produtos neste lote`);
+      
+      // Adicionar produtos ao array master
+      allProducts = allProducts.concat(response);
+      console.log(`Total acumulado: ${allProducts.length}/${totalCount} produtos`);
       
       // Verificar se há mais páginas
-      if (productBatch.length < 250) {
-        hasNextPage = false;
-        console.log('Última página alcançada.');
-      } else {
-        // Configurar para buscar a próxima página
-        params.page_info = productBatch.nextPageParameters?.page_info;
-        if (!params.page_info) {
-          params.page = (params.page || 1) + 1;
-        }
+      const link = shopify.callLimits.calls.rest.made[0]?.header?.link;
+      if (!link || !link.includes('rel="next"')) {
+        console.log('Não há mais páginas para buscar');
+        break;
       }
+      
+      // Extrair o cursor para a próxima página
+      const nextLink = link.split(',').find(str => str.includes('rel="next"'));
+      if (!nextLink) break;
+      
+      const match = nextLink.match(/page_info=([^>&]*)/);
+      if (!match) break;
+      
+      pageInfo = match[1];
+      console.log(`Cursor para próxima página obtido: ${pageInfo.substring(0, 10)}...`);
     }
     
-    console.log(`Total de ${allProducts.length} produtos recuperados.`);
+    console.log(`Processamento completo: ${allProducts.length}/${totalCount} produtos obtidos`);
     
-    // Processar produtos e variantes para CSV
+    // Processar produtos para CSV
     let csvData = [];
     
     for (const product of allProducts) {
@@ -71,13 +88,12 @@ module.exports = async (req, res) => {
       }
     }
     
-    console.log(`Processadas ${csvData.length} linhas de produtos/variantes para o CSV.`);
+    console.log(`Processadas ${csvData.length} variantes para o CSV`);
     
-    // Criar CSV como string
+    // Criar CSV
     let csvContent = 'ID,Variant_ID,SKU,Nome_do_Produto,Variação,Quantidade,Preço\n';
     
     csvData.forEach(item => {
-      // Escapar aspas dentro de strings e envolver campos de texto em aspas duplas
       const escapedName = item.product_name.replace(/"/g, '""');
       const escapedVariant = item.variant_name.replace(/"/g, '""');
       const escapedSku = item.sku.replace(/"/g, '""');
@@ -85,19 +101,13 @@ module.exports = async (req, res) => {
       csvContent += `${item.id},${item.variant_id},"${escapedSku}","${escapedName}","${escapedVariant}",${item.inventory_quantity},${item.price}\n`;
     });
     
-    // Configurar a resposta para download automático
+    // Enviar resposta
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename=todos-produtos-shopify.csv');
-    
-    console.log('Enviando CSV com todos os produtos...');
     res.status(200).send(csvContent);
     
   } catch (error) {
-    console.error('Erro durante a exportação:', error);
-    res.status(500).json({ 
-      error: 'Falha ao exportar produtos', 
-      message: error.message,
-      stack: error.stack 
-    });
+    console.error('Erro na exportação:', error);
+    res.status(500).json({ error: 'Falha ao exportar produtos', message: error.message });
   }
 };
