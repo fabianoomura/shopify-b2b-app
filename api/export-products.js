@@ -1,7 +1,9 @@
 const Shopify = require('shopify-api-node');
+
 module.exports = async (req, res) => {
   try {
     console.log('Iniciando exportação de produtos');
+    
     // Verificar credenciais
     if (!process.env.SHOPIFY_SHOP_NAME || !process.env.SHOPIFY_API_KEY || !process.env.SHOPIFY_PASSWORD) {
       return res.status(500).json({
@@ -9,6 +11,7 @@ module.exports = async (req, res) => {
         message: 'Credenciais do Shopify não configuradas'
       });
     }
+    
     // Configurar Shopify
     const shopify = new Shopify({
       shopName: process.env.SHOPIFY_SHOP_NAME,
@@ -16,6 +19,7 @@ module.exports = async (req, res) => {
       password: process.env.SHOPIFY_PASSWORD,
       apiVersion: '2023-10'
     });
+    
     // Buscar produtos usando paginação baseada em cursor (since_id)
     console.log('Iniciando busca de produtos...');
     let allProducts = [];
@@ -24,7 +28,7 @@ module.exports = async (req, res) => {
     let hasMoreProducts = true;
     let lastId = 0;
     let page = 1;
-    
+
     while (hasMoreProducts) {
       try {
         console.log(`Buscando página ${page} com since_id: ${lastId}...`);
@@ -34,23 +38,23 @@ module.exports = async (req, res) => {
         
         const products = await shopify.product.list(params);
         console.log(`Recebidos ${products.length} produtos na página ${page}`);
-        
+
         // Adicionar produtos ao array master
         allProducts = allProducts.concat(products);
         console.log(`Total acumulado: ${allProducts.length} produtos`);
-        
+
         // Verificar se chegamos ao fim
         if (products.length < 1) {
           console.log('Não há mais produtos para buscar');
           hasMoreProducts = false;
           break;
         }
-        
+
         // Atualizar o último ID para a próxima página
         lastId = products[products.length - 1].id;
         page++;
-        
-        // Proteção contra loops infinitos ou problemas - aumentado para 50 páginas
+
+        // Proteção contra loops infinitos ou problemas
         if (page > 50) {
           console.log('Limite de segurança de páginas atingido (50 páginas)');
           hasMoreProducts = false;
@@ -62,14 +66,14 @@ module.exports = async (req, res) => {
         break;
       }
     }
-    console.log(`Busca concluída: ${allProducts.length} produtos obtidos no total`);
     
-    // O restante do código permanece o mesmo...
+    console.log(`Busca concluída: ${allProducts.length} produtos obtidos no total`);
     
     // Processar produtos para CSV
     console.log('Processando produtos para CSV...');
     let csvData = [];
     let variantCount = 0;
+    
     for (const product of allProducts) {
       if (product.variants && product.variants.length > 0) {
         for (const variant of product.variants) {
@@ -86,21 +90,28 @@ module.exports = async (req, res) => {
         }
       }
     }
+    
     console.log(`Processamento concluído: ${variantCount} variantes para o CSV`);
+    
     // Criar CSV
     let csvContent = 'ID,Variant_ID,SKU,Nome_do_Produto,Variação,Quantidade,Preço\n';
+    
     csvData.forEach(item => {
       // Garantir que campos de texto estão devidamente escapados
       const safeProduct = item.product_name ? item.product_name.replace(/"/g, '""') : '';
       const safeVariant = item.variant_name ? item.variant_name.replace(/"/g, '""') : '';
       const safeSku = item.sku ? item.sku.replace(/"/g, '""') : '';
+      
       csvContent += `${item.id},${item.variant_id},"${safeSku}","${safeProduct}","${safeVariant}",${item.inventory_quantity},${item.price}\n`;
     });
+    
     console.log('CSV gerado com sucesso, enviando resposta...');
+    
     // Enviar resposta
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename=todos-produtos-shopify.csv');
     res.status(200).send(csvContent);
+    
   } catch (error) {
     console.error('Erro na exportação:', error);
     res.status(500).json({
